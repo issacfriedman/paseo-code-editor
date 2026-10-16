@@ -9,11 +9,13 @@ type Props = {
   languageId: string;
   colored: boolean;
   theme: PluginTheme;
+  fontSize: number;
+  lineHeight: number;
   onChangeText(text: string): void;
 };
 
 // Colored text goes in as children of the TextInput, so the phone editor keeps syntax colors while typing.
-export function NativeEditor({ text, languageId, colored, theme, onChangeText }: Props) {
+export function NativeEditor({ text, languageId, colored, theme, fontSize, lineHeight, onChangeText }: Props) {
   const dark = isDark(theme.colors.surface0);
   const palette = tokenColors(dark);
   const spans = useMemo(
@@ -27,11 +29,11 @@ export function NativeEditor({ text, languageId, colored, theme, onChangeText }:
       color: theme.colors.foreground,
       backgroundColor: theme.colors.surface0,
       fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
-      fontSize: 13,
-      lineHeight: 19,
+      fontSize,
+      lineHeight: Math.round(fontSize * lineHeight),
       textAlignVertical: "top" as const,
     }),
-    [theme],
+    [theme, fontSize, lineHeight],
   );
   return (
     <TextInput

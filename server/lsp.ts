@@ -39,7 +39,7 @@ const sessionsByKey = new Map<string, Session>();
 
 // The plugin subprocess runs in the daemon's cwd, so find our own directory from the daemon config.
 let pluginDirCache: string | null | undefined;
-function pluginDir(): string | null {
+export function pluginDir(): string | null {
   if (pluginDirCache !== undefined) return pluginDirCache;
   const home = process.env.PASEO_HOME ?? path.join(os.homedir(), ".paseo");
   const candidates: string[] = [];

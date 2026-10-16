@@ -86,3 +86,15 @@ export const stopLsp = defineRpc({
   input: z.object({ sessionId: z.string() }),
   output: z.object({}),
 });
+
+// Large web-only assets (Monaco, fonts) come from the daemon in chunks, so the phone bundle stays small.
+export const getAsset = defineRpc({
+  name: "assets.get",
+  input: z.object({ name: z.string(), offset: z.number().int().min(0) }),
+  output: z.object({
+    // Base64. Gzip-compressed for scripts and styles; raw bytes for fonts.
+    data: z.string(),
+    total: z.number(),
+    gzip: z.boolean(),
+  }),
+});

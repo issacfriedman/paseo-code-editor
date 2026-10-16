@@ -5,7 +5,7 @@
     "paseo": ">=0.11.2"
   },
   "name": "Code editor",
-  "description": "Edit workspace files with code colors and language servers on web, desktop, iPhone, and iPad",
+  "description": "Monaco code editor with language servers (TS, JS, Vue, Python), ligature fonts, and themes; plain editor with code colors on phones",
   "build": [
     [
       "npm",

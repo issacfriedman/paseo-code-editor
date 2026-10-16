@@ -1,29 +1,25 @@
 import { useEffect, useRef } from "react";
 import { View } from "react-native";
-import type { EditorColors, LspHub, WebEditorHandle, createWebEditor } from "./web-editor/mount";
+import type { EditorPrefs } from "../shared/settings";
+import type { createMonacoEditor, MonacoEditorHandle, PaseoColors } from "./monaco/mount";
 
 type Props = {
+  create: typeof createMonacoEditor;
+  options: Omit<Parameters<typeof createMonacoEditor>[0], "parent" | "onChange" | "onSave" | "onToggleFiles">;
   visible: boolean;
-  doc: string;
-  uri: string;
-  absolutePath: string;
-  languageId: string;
-  lspLanguageId: string;
-  serverId: string | null;
-  colors: EditorColors;
-  hub: LspHub;
-  create: typeof createWebEditor;
-  onReady(handle: WebEditorHandle): void;
+  prefs: EditorPrefs;
+  colors: PaseoColors;
+  onReady(handle: MonacoEditorHandle): void;
   onDispose(): void;
   onChange(): void;
   onSave(): void;
-  onQuickOpen(): void;
+  onToggleFiles(): void;
 };
 
-// Web only. React Native Web hands back the real DOM node for a View ref, and CodeMirror mounts into it.
-export function WebEditorView(props: Props) {
+// Web only. React Native Web hands back the real DOM node for a View ref, and Monaco mounts into it.
+export function MonacoView(props: Props) {
   const host = useRef<View>(null);
-  const handle = useRef<WebEditorHandle | null>(null);
+  const handle = useRef<MonacoEditorHandle | null>(null);
   const latest = useRef(props);
   latest.current = props;
 
@@ -31,18 +27,11 @@ export function WebEditorView(props: Props) {
     const p = latest.current;
     if (host.current) {
       handle.current = p.create({
+        ...p.options,
         parent: host.current,
-        doc: p.doc,
-        uri: p.uri,
-        absolutePath: p.absolutePath,
-        languageId: p.languageId,
-        lspLanguageId: p.lspLanguageId,
-        serverId: p.serverId,
-        colors: p.colors,
-        hub: p.hub,
         onChange: () => latest.current.onChange(),
         onSave: () => latest.current.onSave(),
-        onQuickOpen: () => latest.current.onQuickOpen(),
+        onToggleFiles: () => latest.current.onToggleFiles(),
       });
       p.onReady(handle.current);
     }
@@ -51,13 +40,13 @@ export function WebEditorView(props: Props) {
       handle.current = null;
       latest.current.onDispose();
     };
-    // The editor lives for the life of the tab; content changes go through the handle.
+    // The editor lives for the life of the tab; later changes go through the handle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    handle.current?.setColors(props.colors);
-  }, [props.colors]);
+    handle.current?.setPrefs(props.prefs, props.colors);
+  }, [props.prefs, props.colors]);
 
   useEffect(() => {
     if (props.visible) setTimeout(() => handle.current?.focus(), 0);

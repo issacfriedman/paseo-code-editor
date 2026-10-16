@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, View } from "react-native";
-import { type PluginWorkspacePanelProps, useRpc } from "@getpaseo/plugin/client";
+import { type PluginWorkspacePanelProps, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { languageForPath, type LanguageInfo } from "../shared/languages";
 import {
+  getAsset,
   pollLsp,
   readFile,
   sendLsp,
@@ -17,8 +18,10 @@ import { FileBrowser } from "./file-browser";
 import { subscribeOpen } from "./open-requests";
 import { NativeEditor } from "./native/native-editor";
 import { canHighlight, MAX_HIGHLIGHT_CHARS } from "./native/highlight";
-import { WebEditorView } from "./web-editor-view";
-import type * as WebKit from "./web-editor/mount";
+import { MonacoView } from "./monaco-view";
+import type * as WebKit from "./monaco/mount";
+import { DEFAULT_PREFS, editorSettings, type EditorPrefs } from "../shared/settings";
+import { openEditorSettings } from "./explorer-tree";
 
 type Tab = {
   path: string;
@@ -39,6 +42,8 @@ const WATCH_MS = 4000;
 
 export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanelProps) {
   const toast = useToast();
+  const settings = useSettings(editorSettings);
+  const prefs: EditorPrefs = settings.status === "ready" ? (settings.values as EditorPrefs) : DEFAULT_PREFS;
   const rpc = {
     root: useRpc(workspaceRootRpc),
     read: useRpc(readFile),
@@ -48,6 +53,7 @@ export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
     send: useRpc(sendLsp),
     poll: useRpc(pollLsp),
     stop: useRpc(stopLsp),
+    asset: useRpc(getAsset),
   };
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
@@ -60,8 +66,11 @@ export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
   const [lspStatus, setLspStatus] = useState<Record<string, WebKit.LspStatus>>({});
   const [closeArmed, setCloseArmed] = useState<string | null>(null);
   const [colored, setColored] = useState(true);
-  const [kit, setKit] = useState<typeof WebKit | null>(null);
-  const handles = useRef(new Map<string, WebKit.WebEditorHandle>());
+  const [kit, setKit] = useState<{ mod: typeof WebKit; monaco: WebKit.Monaco } | null>(null);
+  const [kitError, setKitError] = useState<string | null>(null);
+  const handles = useRef(new Map<string, WebKit.MonacoEditorHandle>());
+  // Where to put the cursor once a tab opened by go-to-definition finishes mounting.
+  const pendingReveal = useRef(new Map<string, { line: number; column: number }>());
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -116,21 +125,27 @@ export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
   const rootRef = useRef(root);
   rootRef.current = root;
 
-  // CodeMirror and the LSP client load on web only, so the phone app never runs DOM code.
+  // Monaco and the LSP client load on web only, so the phone app never runs DOM code.
   const clientId = useMemo(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, []);
   useEffect(() => {
     if (!isWeb) return;
     let cancelled = false;
-    void import("./web-editor/mount").then((mod) => {
-      if (!cancelled) setKit(mod);
-    });
+    void import("./monaco/mount")
+      .then(async (mod) => {
+        const monaco = await mod.loadMonaco((input) => rpcRef.current.asset(input));
+        if (!cancelled) setKit({ mod, monaco });
+      })
+      .catch((error) => {
+        if (!cancelled) setKitError(`Could not load the editor: ${String(error)}`);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
   const hub = useMemo(() => {
     if (!kit) return null;
-    return new kit.LspHub(
+    return new kit.mod.LspHub(
+      kit.monaco,
       {
         start: (input) => rpcRef.current.start(input),
         send: (input) => rpcRef.current.send(input),
@@ -140,15 +155,24 @@ export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
       workspaceId,
       clientId,
       (serverId, status) => setLspStatus((s) => ({ ...s, [serverId]: status })),
-      (absolutePath) => {
-        const base = rootRef.current;
-        if (!base || !absolutePath.startsWith(base + "/")) return false;
-        openPathRef.current(absolutePath.slice(base.length + 1));
-        return true;
-      },
     );
   }, [kit, workspaceId, clientId]);
   useEffect(() => () => hub?.dispose(), [hub]);
+
+  // Go to definition into another file of this workspace opens it here.
+  useEffect(() => {
+    if (!kit || !root) return;
+    return kit.mod.registerPathOpener(root, (absolutePath, line, column) => {
+      const rel = absolutePath.slice(root.length + 1);
+      if (line) {
+        const open = handles.current.get(rel);
+        if (open) open.reveal(line, column ?? 1);
+        else pendingReveal.current.set(rel, { line, column: column ?? 1 });
+      }
+      openPathRef.current(rel);
+      return true;
+    });
+  }, [kit, root]);
 
   const currentText = useCallback((tab: Tab) => {
     if (isWeb) return handles.current.get(tab.path)?.getText() ?? tab.diskText;
@@ -341,6 +365,7 @@ export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
         {!isWeb && activeTab && canHighlight(activeTab.language.id)
           ? button(colored ? "Colors on" : "Colors off", "Palette", () => setColored((v) => !v))
           : null}
+        {button("Editor settings", "Type", () => openEditorSettings())}
         {button("Save", "Save", () => active && void save(active), !activeTab?.dirty)}
       </View>
 
@@ -390,30 +415,55 @@ export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
             );
           }
           if (isWeb) {
-            if (!kit || !hub || !root) return null;
-            const absolutePath = `${root}/${tab.path}`;
+            if (kitError) {
+              return visible ? (
+                <View key={tab.path} style={{ flex: 1, padding: 16 }}>
+                  <Text style={{ color: c.statusDanger }}>{kitError}</Text>
+                </View>
+              ) : null;
+            }
+            if (!kit || !hub || !root) {
+              return visible ? (
+                <View key={tab.path} style={{ flex: 1, padding: 16 }}>
+                  <Text style={{ color: c.foregroundMuted }}>Loading editor…</Text>
+                </View>
+              ) : null;
+            }
             return (
-              <WebEditorView
+              <MonacoView
                 key={tab.path}
+                create={kit.mod.createMonacoEditor}
                 visible={visible}
-                doc={tab.diskText}
-                uri={kit.pathToUri(absolutePath)}
-                absolutePath={absolutePath}
-                languageId={tab.language.id}
-                lspLanguageId={tab.language.lspLanguageId}
-                serverId={tab.language.serverId}
+                prefs={prefs}
                 colors={colors}
-                hub={hub}
-                create={kit.createWebEditor}
-                onReady={(handle) => handles.current.set(tab.path, handle)}
+                options={{
+                  monaco: kit.monaco,
+                  assets: (input) => rpcRef.current.asset(input),
+                  doc: tab.diskText,
+                  absolutePath: `${root}/${tab.path}`,
+                  lspLanguageId: tab.language.lspLanguageId,
+                  serverId: tab.language.serverId,
+                  prefs,
+                  colors,
+                  hub,
+                }}
+                onReady={(handle) => {
+                  handles.current.set(tab.path, handle);
+                  const reveal = pendingReveal.current.get(tab.path);
+                  if (reveal) {
+                    pendingReveal.current.delete(tab.path);
+                    setTimeout(() => handle.reveal(reveal.line, reveal.column), 50);
+                  }
+                }}
                 onDispose={() => handles.current.delete(tab.path)}
                 onChange={() => {
                   const text = handles.current.get(tab.path)?.getText();
-                  const dirty = text !== undefined && text !== tabsRef.current.find((t) => t.path === tab.path)?.diskText;
-                  if (dirty !== tabsRef.current.find((t) => t.path === tab.path)?.dirty) updateTab(tab.path, { dirty });
+                  const current = tabsRef.current.find((t) => t.path === tab.path);
+                  const dirty = text !== undefined && text !== current?.diskText;
+                  if (dirty !== current?.dirty) updateTab(tab.path, { dirty });
                 }}
                 onSave={() => void saveRef.current(tab.path)}
-                onQuickOpen={() => setTreeOpen(true)}
+                onToggleFiles={() => setTreeOpen((v) => !v)}
               />
             );
           }
@@ -421,6 +471,8 @@ export function EditorPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
           return (
             <NativeEditor
               key={tab.path}
+              fontSize={prefs.fontSize}
+              lineHeight={prefs.lineHeight}
               text={tab.nativeText}
               languageId={tab.language.id}
               colored={colored && tab.nativeText.length <= MAX_HIGHLIGHT_CHARS}

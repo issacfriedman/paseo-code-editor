@@ -1,5 +1,6 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
+  getAsset,
   listDir,
   listFiles,
   pollLsp,
@@ -12,6 +13,8 @@ import {
   writeFile,
 } from "./shared/contracts";
 import { handleDir, handleList, handleRead, handleRoot, handleStat, handleWrite } from "./server/files";
+import { handleAsset } from "./server/assets";
+import { editorSettings } from "./shared/settings";
 import { handlePoll, handleSend, handleStart, handleStop, startReaper } from "./server/lsp";
 
 export default function contribute(server: PluginServerContext) {
@@ -25,5 +28,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(sendLsp, handleSend);
   server.handle(pollLsp, handlePoll);
   server.handle(stopLsp, handleStop);
+  server.handle(getAsset, handleAsset);
+  server.registerSettings(editorSettings);
   return startReaper();
 }

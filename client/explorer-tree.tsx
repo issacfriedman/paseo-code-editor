@@ -9,6 +9,10 @@ export function setExplorerClient(value: PluginClientContext | null) {
   client = value;
 }
 
+export function openEditorSettings() {
+  client?.openSettings("editor");
+}
+
 // The "Code" tab in the Files sidebar. Tapping a file opens it in the Code editor panel.
 export function ExplorerTree({ theme, layout, workspaceId }: PluginWorkspacePanelProps) {
   const [active, setActive] = useState<string | null>(null);
