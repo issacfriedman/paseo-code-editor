@@ -1,0 +1,18 @@
+{
+  "id": "code-editor",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.11.2"
+  },
+  "name": "Code editor",
+  "description": "Edit workspace files with code colors and language servers on web, desktop, iPhone, and iPad",
+  "build": [
+    [
+      "npm",
+      "ci",
+      "--omit=dev",
+      "--no-audit",
+      "--no-fund"
+    ]
+  ]
+}
